@@ -1,63 +1,46 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-/**
- * Handles typing indicator using Supabase Realtime Broadcast.
- * - Broadcasts "typing" events when current user types
- * - Listens for "typing" events from the friend
- */
 export function useTyping(currentUserId, friendId) {
   const [friendIsTyping, setFriendIsTyping] = useState(false);
-
-  // Ref to hold the channel so we can broadcast from MessageInput
   const channelRef = useRef(null);
-
-  // Ref to clear the "friend is typing" indicator after they stop
-  const typingTimeoutRef = useRef(null);
+  const hideTimeoutRef = useRef(null);
 
   useEffect(() => {
     if (!currentUserId || !friendId) return;
 
-    // Unique channel per conversation (same for both users)
-    const channelName = [currentUserId, friendId].sort().join("_typing_");
+    // Sort ids so both users join the same channel name
+    const channelName = `typing_${[currentUserId, friendId].sort().join("_")}`;
 
-    const channel = supabase
+    const ch = supabase
       .channel(channelName)
       .on("broadcast", { event: "typing" }, ({ payload }) => {
-        // Only react to the friend's typing events, not our own
-        if (payload.user_id !== currentUserId) {
-          setFriendIsTyping(true);
+        if (payload.user_id === currentUserId) return; // ignore own events
 
-          // Clear previous timeout
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        setFriendIsTyping(true);
 
-          // Hide indicator after 2s of no typing events from friend
-          typingTimeoutRef.current = setTimeout(() => {
-            setFriendIsTyping(false);
-          }, 2000);
-        }
-      })
-      .on("broadcast", { event: "stopped_typing" }, ({ payload }) => {
-        if (payload.user_id !== currentUserId) {
+        // Auto-hide after 2s if no new typing event
+        if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+        hideTimeoutRef.current = setTimeout(() => {
           setFriendIsTyping(false);
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        }
+        }, 2000);
+      })
+      .on("broadcast", { event: "stop" }, ({ payload }) => {
+        if (payload.user_id === currentUserId) return;
+        setFriendIsTyping(false);
+        if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
       })
       .subscribe();
 
-    channelRef.current = channel;
+    channelRef.current = ch;
 
     return () => {
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      channel.unsubscribe();
+      if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+      ch.unsubscribe();
       channelRef.current = null;
     };
   }, [currentUserId, friendId]);
 
-  /**
-   * Call this whenever the current user types something.
-   * Broadcasts a "typing" event to the friend.
-   */
   async function broadcastTyping() {
     if (!channelRef.current) return;
     await channelRef.current.send({
@@ -67,15 +50,11 @@ export function useTyping(currentUserId, friendId) {
     });
   }
 
-  /**
-   * Call this when the user clears input or sends a message.
-   * Broadcasts a "stopped_typing" event.
-   */
   async function broadcastStoppedTyping() {
     if (!channelRef.current) return;
     await channelRef.current.send({
       type: "broadcast",
-      event: "stopped_typing",
+      event: "stop",
       payload: { user_id: currentUserId },
     });
   }

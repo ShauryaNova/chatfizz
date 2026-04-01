@@ -1,28 +1,44 @@
 import { useState, useRef } from "react";
 import { sendMessage } from "../../features/chat/sendMessage";
 
-export default function MessageInput({ userId, friendId, onTyping, onStoppedTyping }) {
+export default function MessageInput({ userId, friendId, onTyping, onStoppedTyping, onOptimisticSend }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
-
-  // Timeout ref to detect when user stopped typing
   const typingTimeoutRef = useRef(null);
 
   async function handleSend() {
-    if (!text.trim()) return;
+    if (!text.trim() || sending) return;
+
+    const content = text.trim();
+
+    // 1. Clear input immediately — feels instant
+    setText("");
     setSending(true);
     setError(null);
 
-    // Tell friend we stopped typing before sending
+    // 2. Stop typing indicator
     if (onStoppedTyping) onStoppedTyping();
 
-    const { error: sendError } = await sendMessage(userId, friendId, text);
+    // 3. Optimistically add message to UI before DB confirms
+    if (onOptimisticSend) {
+      onOptimisticSend({
+        id: `optimistic_${Date.now()}`, // temp id
+        from_user_id: userId,
+        to_user_id: friendId,
+        content,
+        created_at: new Date().toISOString(),
+        optimistic: true, // flag so we can replace it with real msg
+      });
+    }
+
+    // 4. Send to database in background
+    const { error: sendError } = await sendMessage(userId, friendId, content);
 
     if (sendError) {
       setError(sendError);
-    } else {
-      setText("");
+      // Restore text if send failed
+      setText(content);
     }
 
     setSending(false);
@@ -38,13 +54,9 @@ export default function MessageInput({ userId, friendId, onTyping, onStoppedTypi
   function handleChange(e) {
     setText(e.target.value);
 
-    // Broadcast typing event
     if (onTyping) onTyping();
 
-    // Clear previous stop-typing timeout
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-
-    // If user stops typing for 1.5s, broadcast stopped_typing
     typingTimeoutRef.current = setTimeout(() => {
       if (onStoppedTyping) onStoppedTyping();
     }, 1500);
@@ -61,15 +73,16 @@ export default function MessageInput({ userId, friendId, onTyping, onStoppedTypi
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          disabled={sending}
+          disabled={false} // never disable — feels laggy
           autoComplete="off"
+          autoFocus
         />
         <button
           className="send-btn"
           onClick={handleSend}
-          disabled={sending || !text.trim()}
+          disabled={!text.trim()}
         >
-          {sending ? "…" : "Send"}
+          Send
         </button>
       </div>
     </div>

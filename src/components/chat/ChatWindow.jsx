@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import ChatBox from "./ChatBox";
 import MessageInput from "./MessageInput";
 import { usePresence } from "../../features/chat/usePresence";
@@ -10,9 +11,11 @@ export default function ChatWindow({ userId, friend }) {
     friend?.id
   );
 
+  // Ref to call ChatBox's optimistic handler
+  const optimisticRef = useRef(null);
+
   return (
     <div className="chat-window">
-      {/* Header */}
       <div className="chat-header">
         <div className="chat-header-avatar-wrap">
           <div className="chat-header-avatar">
@@ -23,7 +26,6 @@ export default function ChatWindow({ userId, friend }) {
 
         <div className="chat-header-info">
           <span className="chat-header-name">{friend?.display_name}</span>
-          {/* Show typing indicator OR online/offline status */}
           {friendIsTyping ? (
             <span className="chat-header-typing">
               <span className="typing-dots">
@@ -39,20 +41,21 @@ export default function ChatWindow({ userId, friend }) {
         </div>
       </div>
 
-      {/* Messages + typing bubble at bottom */}
+      {/* ChatBox handles its own optimistic ref */}
       <ChatBox
         userId={userId}
         friendId={friend?.id}
         friendIsTyping={friendIsTyping}
         friendName={friend?.display_name}
+        optimisticRef={optimisticRef}
       />
 
-      {/* Input — receives broadcast functions */}
       <MessageInput
         userId={userId}
         friendId={friend?.id}
         onTyping={broadcastTyping}
         onStoppedTyping={broadcastStoppedTyping}
+        onOptimisticSend={(msg) => optimisticRef.current?.(msg)}
       />
     </div>
   );

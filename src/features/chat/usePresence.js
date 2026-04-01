@@ -1,50 +1,87 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+// Single global channel — free tier safe (uses only 1 realtime slot)
+let channel = null;
+let listeners = new Set();
+let userCount = 0;
+
+function getOnlineIds(state) {
+  return new Set(Object.keys(state));
+}
+
 /**
- * Tracks online/offline status using Supabase Realtime Presence.
- * Call this with your own userId to broadcast presence,
- * and pass a friendId to track if they are online.
+ * Global presence tracker.
+ * One shared channel for the entire app — won't hit free tier limits.
  */
 export function usePresence(currentUserId, friendId) {
   const [isFriendOnline, setIsFriendOnline] = useState(false);
 
   useEffect(() => {
-    if (!currentUserId || !friendId) return;
+    if (!currentUserId) return;
 
-    // Create a presence channel — all users join the same channel
-    const channel = supabase.channel("online_users", {
-      config: { presence: { key: currentUserId } },
-    });
+    userCount++;
 
-    channel
-      .on("presence", { event: "sync" }, () => {
-        // Get the full state of who is online
-        const state = channel.presenceState();
+    function updateOnlineStatus(state) {
+      const ids = getOnlineIds(state);
+      // Notify all listeners
+      listeners.forEach((cb) => cb(ids));
+    }
 
-        // Check if friendId appears in the presence state keys
-        const onlineUserIds = Object.keys(state);
-        setIsFriendOnline(onlineUserIds.includes(friendId));
-      })
-      .on("presence", { event: "join" }, ({ key }) => {
-        // Someone came online
-        if (key === friendId) setIsFriendOnline(true);
-      })
-      .on("presence", { event: "leave" }, ({ key }) => {
-        // Someone went offline
-        if (key === friendId) setIsFriendOnline(false);
-      })
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          // Broadcast that current user is online
-          await channel.track({ user_id: currentUserId, online_at: new Date().toISOString() });
-        }
+    // Create channel only once
+    if (!channel) {
+      channel = supabase.channel("presence_global", {
+        config: {
+          presence: { key: currentUserId },
+        },
       });
 
-    // Cleanup: untrack presence when component unmounts
+      channel
+        .on("presence", { event: "sync" }, () => {
+          updateOnlineStatus(channel.presenceState());
+        })
+        .on("presence", { event: "join" }, () => {
+          updateOnlineStatus(channel.presenceState());
+        })
+        .on("presence", { event: "leave" }, () => {
+          updateOnlineStatus(channel.presenceState());
+        })
+        .subscribe(async (status) => {
+          if (status === "SUBSCRIBED") {
+            await channel.track({
+              user_id: currentUserId,
+              online_at: new Date().toISOString(),
+            });
+          }
+        });
+    } else {
+      // Re-track on re-mount (e.g. page navigation)
+      if (channel.state === "joined") {
+        channel.track({
+          user_id: currentUserId,
+          online_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Register this hook's listener
+    function onUpdate(ids) {
+      if (friendId) {
+        setIsFriendOnline(ids.has(friendId));
+      }
+    }
+
+    listeners.add(onUpdate);
+
     return () => {
-      channel.untrack();
-      channel.unsubscribe();
+      listeners.delete(onUpdate);
+      userCount--;
+
+      if (userCount === 0 && channel) {
+        channel.untrack();
+        channel.unsubscribe();
+        channel = null;
+      }
     };
   }, [currentUserId, friendId]);
 
