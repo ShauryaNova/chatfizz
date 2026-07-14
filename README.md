@@ -18,5 +18,4 @@ If you are developing a production application, we recommend using TypeScript wi
 
 
 it is my first project .
-
 and i am doing it for testing out teh feature.
